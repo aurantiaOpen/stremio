@@ -2,7 +2,6 @@ const { addonBuilder } = require("stremio-addon-sdk");
 const fetch = require("node-fetch");
 const http = require("http");
 const https = require("https");
-const url = require("url");
 
 // ─── Configurazione ───────────────────────────────────────────────────────────
 const DEVICE_ID = process.env.DEVICE_ID || "xhCxVPXwUCVpKiD3lArm2ILNc7BRdDrb";
@@ -159,7 +158,7 @@ const manifest = {
   version: "1.1.0",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive — Festa dei Ceri e tradizioni umbre",
-  logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
+  logo: `${MEDIA_BASE}/apple-touch-icon.png`,
   catalogs: [
     {
       id: "arancialive-live",
@@ -299,50 +298,47 @@ function videoUrlToProxy(videoUrl) {
 }
 
 // ─── Server HTTP (addon + proxy) ─────────────────────────────────────────────
-const addonInterface = builder.getInterface();
+// Usiamo getRouter() dell'SDK che restituisce un Express router,
+// poi montiamo sopra il nostro proxy /proxy/stream/*
+const { getRouter } = require("stremio-addon-sdk");
+const addonRouter = getRouter(builder.getInterface());
 
 const server = http.createServer((req, res) => {
-  const parsedUrl = url.parse(req.url);
-  const pathname = parsedUrl.pathname;
+  const reqUrl = new URL(req.url, `http://localhost`);
+  const pathname = reqUrl.pathname;
 
-  // CORS per Stremio
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
-
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     return res.end();
   }
 
-  // ── Proxy trasparente per stream HLS ──────────────────────────────────────
-  // GET /proxy/stream/{host}/{...path}
+  // ── Proxy HLS: GET /proxy/stream/{host}/{...path} ─────────────────────────
   if (pathname.startsWith("/proxy/stream/")) {
-    const rest = pathname.slice("/proxy/stream/".length); // "c10.arancialive.com/ondemand/..."
+    const rest = pathname.slice("/proxy/stream/".length);
     const slashIdx = rest.indexOf("/");
     const cdnHost = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
     const cdnPath = slashIdx === -1 ? "/" : rest.slice(slashIdx);
 
-    // Whitelist host per sicurezza
-    if (!/^[a-z0-9]+\.arancialive\.com$/.test(cdnHost)) {
+    if (!/^[a-z0-9-]+\.arancialive\.com$/.test(cdnHost)) {
       res.writeHead(400);
       return res.end("Host non valido");
     }
 
-    const targetUrl = `https://${cdnHost}${cdnPath}${parsedUrl.search || ""}`;
-    console.log(`[proxy] ${targetUrl}`);
+    const targetUrl = `https://${cdnHost}${cdnPath}${reqUrl.search || ""}`;
+    console.log(`[proxy] → ${targetUrl}`);
 
     fetchUpstream(targetUrl, CDN_HEADERS, (err, upstream, status) => {
       if (err || !upstream) {
         console.error("[proxy] errore:", err?.message);
-        res.writeHead(502);
-        return res.end("Bad Gateway");
+        if (!res.headersSent) { res.writeHead(502); res.end("Bad Gateway"); }
+        return;
       }
 
       const ct = upstream.headers["content-type"] || "";
-      const isM3u8 =
-        ct.includes("mpegurl") ||
-        cdnPath.endsWith(".m3u8") ||
-        cdnPath.includes(".m3u8");
+      const isM3u8 = ct.includes("mpegurl") || cdnPath.includes(".m3u8");
 
       if (isM3u8) {
         const chunks = [];
@@ -350,37 +346,30 @@ const server = http.createServer((req, res) => {
         upstream.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf8");
           const rewritten = rewriteM3u8(text, targetUrl);
-          res.writeHead(status || 200, {
-            "Content-Type": "application/x-mpegurl",
-            "Access-Control-Allow-Origin": "*",
-          });
+          res.writeHead(status || 200, { "Content-Type": "application/x-mpegurl" });
           res.end(rewritten);
         });
-      } else {
-        // Segmenti .ts e altri file: pass-through diretto
-        res.writeHead(status || 200, {
-          "Content-Type": ct || "application/octet-stream",
-          "Access-Control-Allow-Origin": "*",
+        upstream.on("error", (e) => {
+          console.error("[proxy m3u8]", e.message);
+          if (!res.headersSent) { res.writeHead(502); res.end(); }
         });
+      } else {
+        res.writeHead(status || 200, { "Content-Type": ct || "application/octet-stream" });
         upstream.pipe(res);
       }
     });
     return;
   }
 
-  // ── Addon Stremio ─────────────────────────────────────────────────────────
-  // Stremio SDK usa callback-style; lo adattiamo manualmente
-  addonInterface.get(
-    { url: req.url, headers: req.headers },
-    (statusCode, resHeaders, body) => {
-      res.writeHead(statusCode, resHeaders);
-      res.end(body);
-    }
-  );
+  // ── Addon Stremio (tutto il resto) ────────────────────────────────────────
+  addonRouter(req, res, () => {
+    res.writeHead(404);
+    res.end("Not found");
+  });
 });
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`\n🍊 AranciaLive Stremio Addon`);
-  console.log(`   http://localhost:${PORT}/manifest.json`);
-  console.log(`   Proxy stream: http://localhost:${PORT}/proxy/stream/{host}/{path}\n`);
+  console.log(`   Manifest: http://localhost:${PORT}/manifest.json`);
+  console.log(`   Proxy:    http://localhost:${PORT}/proxy/stream/{host}/{path}\n`);
 });
