@@ -108,15 +108,18 @@ async function apiGet(path) {
       headers: ARANCIA_HEADERS,
       agent: httpsAgent,
       redirect: "follow",
+      timeout: 10000 // Add a timeout so it doesn't hang forever
     });
+
     if (!res.ok) {
-      console.error(`[API] ${path} → ${res.status}`);
-      return null;
+      console.error(`[API] ${path} → Status: ${res.status}`);
+      return null; 
     }
+    
     return await res.json();
   } catch (e) {
     console.error(`[API] ${path} error:`, e.message);
-    return null;
+    return null; // Return null so the calling function can handle it gracefully
   }
 }
 
@@ -302,7 +305,7 @@ function videoUrlToProxy(videoUrl) {
 const addonInterface = builder.getInterface();
 
 const server = http.createServer((req, res) => {
-  const parsedUrl = url.parse(req.url);
+  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = parsedUrl.pathname;
 
   // CORS per Stremio
