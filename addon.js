@@ -183,13 +183,32 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
 builder.defineMetaHandler(async ({ id, type }) => {
   try {
+    if (!id.startsWith("al_")) return { meta: null };
     const idevento = id.replace("al_", "");
-    const data = await apiGet("/live/list"); // Cerchiamo nei live
-    const found = (data || []).find(e => (e.liveinfo?.IDEVENTO || e.IDEVENTO).toString() === idevento);
-    if (found) return { meta: buildMeta(found, type) };
-  } catch (e) {}
+    
+    const [live, ondemand] = await Promise.all([
+      apiGet("/live/list"),
+      apiGet("/ondemandSuddivisi")
+    ]);
+
+    let found = (live || []).find(e => (e.liveinfo?.IDEVENTO || e.IDEVENTO).toString() === idevento);
+    
+    if (!found && Array.isArray(ondemand)) {
+      for (const cat of ondemand) {
+        found = (cat.ListaEventiOndemand || []).find(e => (e.liveinfo?.IDEVENTO || e.IDEVENTO).toString() === idevento);
+        if (found) break;
+      }
+    }
+
+    if (found) {
+      return { meta: buildMeta(found, type) };
+    }
+  } catch (e) {
+    console.error("Errore MetaHandler:", e.message);
+  }
   return { meta: null };
 });
+
 
 builder.defineStreamHandler(async ({ id }) => {
   try {
