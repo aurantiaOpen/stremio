@@ -51,14 +51,22 @@ function rewriteM3u8(content, upstreamUrl) {
 }
 
 function toProxyUrl(uri, base, basePath) {
-  const host = PROXY_URL || PUBLIC_HOST;
+  if (PROXY_URL) {
+    if (/^https?:\/\//.test(uri)) {
+      const m = uri.match(/^https?:\/\/([a-z0-9]+\.arancialive\.com)(\/.*)?$/);
+      if (m) return `${PROXY_URL}/stream/${m[1]}${m[2] || "/"}`;
+      return uri;
+    }
+    if (uri.startsWith("/")) return `${PROXY_URL}/stream/${base.hostname}${uri}`;
+    return `${PROXY_URL}/stream/${base.hostname}${basePath}/${uri}`;
+  }
   if (/^https?:\/\//.test(uri)) {
     const m = uri.match(/^https?:\/\/([a-z0-9]+\.arancialive\.com)(\/.*)?$/);
-    if (m) return `${host}/proxy/stream/${m[1]}${m[2] || "/"}`;
+    if (m) return `${PUBLIC_HOST}/proxy/stream/${m[1]}${m[2] || "/"}`;
     return uri;
   }
-  if (uri.startsWith("/")) return `${host}/proxy/stream/${base.hostname}${uri}`;
-  return `${host}/proxy/stream/${base.hostname}${basePath}/${uri}`;
+  if (uri.startsWith("/")) return `${PUBLIC_HOST}/proxy/stream/${base.hostname}${uri}`;
+  return `${PUBLIC_HOST}/proxy/stream/${base.hostname}${basePath}/${uri}`;
 }
 
 function fetchUpstream(targetUrl, headers, callback, redirectsLeft = 5) {
@@ -139,7 +147,7 @@ function buildMeta(item, type = "movie") {
 
 const manifest = {
   id: ADDON_ID,
-  version: "1.3.0",
+  version: "1.3.1",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive — Festa dei Ceri e tradizioni umbre",
   logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
@@ -265,10 +273,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 function videoUrlToProxy(videoUrl) {
-  const host = PROXY_URL || PUBLIC_HOST;
   try {
     const parsed = new URL(videoUrl);
-    return `${host}/proxy/stream/${parsed.hostname}${parsed.pathname}`;
+    if (PROXY_URL) {
+      return `${PROXY_URL}/stream/${parsed.hostname}${parsed.pathname}`;
+    }
+    return `${PUBLIC_HOST}/proxy/stream/${parsed.hostname}${parsed.pathname}`;
   } catch {
     return videoUrl;
   }
