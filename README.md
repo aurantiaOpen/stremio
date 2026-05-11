@@ -46,3 +46,14 @@ Poi in stremio:
 ## disclaimer
 
 addon non ufficiale. non affiliato con AranciaLive.
+
+---
+title: arancialive plugin
+emoji: 🍊
+colorFrom: orange
+colorTo: yellow
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
