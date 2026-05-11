@@ -10,6 +10,7 @@ const MEDIA_BASE = `https://${UPSTREAM_HOST}`;
 const PORT = Number(process.env.PORT) || 7000;
 const ADDON_ID = "it.arancialive.stremio";
 const PUBLIC_HOST = (process.env.ADDON_HOST || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
+const PROXY_URL = (process.env.PROXY_URL || "").replace(/\/$/, "");
 
 const ARANCIA_HEADERS = {
   "User-Agent": "AranciaLiveApp/19 CFNetwork/3826.600.41 Darwin/24.6.0",
@@ -50,13 +51,14 @@ function rewriteM3u8(content, upstreamUrl) {
 }
 
 function toProxyUrl(uri, base, basePath) {
+  const host = PROXY_URL || PUBLIC_HOST;
   if (/^https?:\/\//.test(uri)) {
     const m = uri.match(/^https?:\/\/([a-z0-9]+\.arancialive\.com)(\/.*)?$/);
-    if (m) return `${PUBLIC_HOST}/proxy/stream/${m[1]}${m[2] || "/"}`;
+    if (m) return `${host}/proxy/stream/${m[1]}${m[2] || "/"}`;
     return uri;
   }
-  if (uri.startsWith("/")) return `${PUBLIC_HOST}/proxy/stream/${base.hostname}${uri}`;
-  return `${PUBLIC_HOST}/proxy/stream/${base.hostname}${basePath}/${uri}`;
+  if (uri.startsWith("/")) return `${host}/proxy/stream/${base.hostname}${uri}`;
+  return `${host}/proxy/stream/${base.hostname}${basePath}/${uri}`;
 }
 
 function fetchUpstream(targetUrl, headers, callback, redirectsLeft = 5) {
@@ -137,10 +139,10 @@ function buildMeta(item, type = "movie") {
 
 const manifest = {
   id: ADDON_ID,
-  version: "1.2.0",
+  version: "1.1.0",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive — Festa dei Ceri e tradizioni umbre",
-  logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
+  logo: `${MEDIA_BASE}/apple-touch-icon.png`,
   catalogs: [
     {
       id: "arancialive-live",
@@ -263,9 +265,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 function videoUrlToProxy(videoUrl) {
+  const host = PROXY_URL || PUBLIC_HOST;
   try {
     const parsed = new URL(videoUrl);
-    return `${PUBLIC_HOST}/proxy/stream/${parsed.hostname}${parsed.pathname}`;
+    return `${host}/proxy/stream/${parsed.hostname}${parsed.pathname}`;
   } catch {
     return videoUrl;
   }
@@ -337,8 +340,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n🍊 AranciaLive Stremio Addon`);
-  console.log(`   Manifest: ${PUBLIC_HOST}/manifest.json`);
-  console.log(`   Proxy:    ${PUBLIC_HOST}/proxy/stream/{host}/{path}`);
-  console.log(`   Public host: ${PUBLIC_HOST}\n`);
+  console.log(`🍊 AranciaLive addon → ${PUBLIC_HOST}/manifest.json`);
+  console.log(`🔀 Stream proxy → ${PROXY_URL || PUBLIC_HOST}`);
 });
