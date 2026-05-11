@@ -139,10 +139,10 @@ function buildMeta(item, type = "movie") {
 
 const manifest = {
   id: ADDON_ID,
-  version: "1.1.0",
+  version: "1.3.0",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive — Festa dei Ceri e tradizioni umbre",
-  logo: `${MEDIA_BASE}/apple-touch-icon.png`,
+  logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
   catalogs: [
     {
       id: "arancialive-live",
