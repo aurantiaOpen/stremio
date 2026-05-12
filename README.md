@@ -36,7 +36,7 @@ Poi in stremio:
 2. inserisci: `http://localhost:7000/manifest.json`
 3. clicca **install**
 
-### metodo 2 — deploy su huggingface - RECCOMENDED
+### metodo 2 — deploy su huggingface - RECOMENDED
 
 1. fai il fork del repo
 2. vai su huggingface e crea un token write
