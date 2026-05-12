@@ -36,17 +36,19 @@ Poi in stremio:
 2. inserisci: `http://localhost:7000/manifest.json`
 3. clicca **install**
 
-### metodo 2 — deploy su render / railway
+### metodo 2 — deploy su huggingface - RECCOMENDED
 
 1. fai il fork del repo
-2. deploy su [render](https://render.com) come **webservice** con `npm start`
-3. usa l'URL pubblico `https://<tuo-app>.onrender.com/manifest.json` in stremio
+2. vai su huggingface e crea un token write
+3. aggiungi il token nel secret `HF_TOKEN`
+4. modifica il nome dello space sul workflow e abilitali
+5. hai finito!
 
 ## note tecniche
 
-- usa il device ID hardcoded nell'APK android (`xhCxVPXwUCVpKiD3lArm2ILNc7BRdDrb`)
+- usa il device ID hardcoded nell'APK android
 - i contenuti a pagamento (`IDTARIFFA != 0`) sono visibili in catalogo ma non riproducibili, ovviamente
-- basato sull'API: doc a [aurantiaOpen/officialapi](https://github.com/aurantiaOpen/officialapi)
+- basato sull'API: doc a [aurantiaOpen/officialapi](https://github.com/aurantiaOpen/api)
 
 ## variabili d'ambiente
 
