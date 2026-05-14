@@ -3,7 +3,8 @@ const fetch = require("node-fetch");
 const http = require("http");
 const https = require("https");
 
-const DEVICE_ID = process.env.DEVICE_ID || "xhCxVPXwUCVpKiD3lArm2ILNc7BRdDrb";
+const DEVICE_ID = process.env.DEVICE_ID;
+const LIVE_PSW = process.env.LIVE_PSW;
 const UPSTREAM_HOST = "www.arancialive.com";
 const BASE_API = `https://${UPSTREAM_HOST}/api/app/1/${DEVICE_ID}`;
 const MEDIA_BASE = `https://${UPSTREAM_HOST}`;
@@ -36,7 +37,6 @@ function rewriteM3u8(content, upstreamUrl) {
     .map((line) => {
       const trimmed = line.trim();
       if (!trimmed) return line;
-
       if (trimmed.startsWith("#") && trimmed.includes('URI="')) {
         return line.replace(/URI="([^"]+)"/g, (_, uri) =>
           `URI="${toProxyUrl(uri, base, basePath)}"`
@@ -53,7 +53,7 @@ function rewriteM3u8(content, upstreamUrl) {
 function toProxyUrl(uri, base, basePath) {
   if (PROXY_URL) {
     if (/^https?:\/\//.test(uri)) {
-      const m = uri.match(/^https?:\/\/([a-z0-9]+\.arancialive\.com)(\/.*)?$/);
+      const m = uri.match(/^https?:\/\/([a-z0-9-]+\.arancialive\.com)(\/.*)?$/);
       if (m) return `${PROXY_URL}/stream/${m[1]}${m[2] || "/"}`;
       return uri;
     }
@@ -61,7 +61,7 @@ function toProxyUrl(uri, base, basePath) {
     return `${PROXY_URL}/stream/${base.hostname}${basePath}/${uri}`;
   }
   if (/^https?:\/\//.test(uri)) {
-    const m = uri.match(/^https?:\/\/([a-z0-9]+\.arancialive\.com)(\/.*)?$/);
+    const m = uri.match(/^https?:\/\/([a-z0-9-]+\.arancialive\.com)(\/.*)?$/);
     if (m) return `${PUBLIC_HOST}/proxy/stream/${m[1]}${m[2] || "/"}`;
     return uri;
   }
@@ -114,6 +114,29 @@ async function apiGet(path) {
   }
 }
 
+async function getLiveStreamUrl() {
+  const targetUrl =
+    `https://${UPSTREAM_HOST}/admin/getUrlstreaming.ashx` +
+    `?https=si&debug=no&psw=${encodeURIComponent(LIVE_PSW)}`;
+  try {
+    const res = await fetch(targetUrl, {
+      headers: ARANCIA_HEADERS,
+      agent: httpsAgent,
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      console.error(`[live] getUrlstreaming → ${res.status}`);
+      return null;
+    }
+    const text = (await res.text()).trim();
+    console.log(`[live] stream URL: ${text}`);
+    return text || null;
+  } catch (e) {
+    console.error(`[live] getUrlstreaming error:`, e.message);
+    return null;
+  }
+}
+
 function posterUrl(u) {
   if (!u) return null;
   return u.startsWith("http") ? u : `${MEDIA_BASE}${u}`;
@@ -147,7 +170,7 @@ function buildMeta(item, type = "movie") {
 
 const manifest = {
   id: ADDON_ID,
-  version: "1.3.1",
+  version: "1.4.0",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive — Festa dei Ceri e tradizioni umbre",
   logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
@@ -249,6 +272,28 @@ builder.defineStreamHandler(async ({ type, id }) => {
   if (!id.startsWith("al_")) return { streams: [] };
   const idevento = parseInt(id.replace("al_", ""));
 
+  if (type === "tv") {
+    const liveList = await apiGet("/live/list");
+    const liveEvent = liveList?.find
+      ? liveList.find((e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento)
+      : null;
+
+    const m3u8Url = await getLiveStreamUrl();
+    if (!m3u8Url) {
+      console.log(`[stream] nessun URL live disponibile`);
+      return { streams: [] };
+    }
+
+    const eventName = liveEvent
+      ? (liveEvent.liveinfo?.Nome || liveEvent.Nome || "Live")
+      : "AranciaLive — Canale Live";
+
+    return {
+      streams: [{ title: `🔴 ${eventName}`, url: m3u8Url, behaviorHints: { notWebReady: false } }],
+      cacheMaxAge: 0,
+    };
+  }
+
   const videos = await apiGet(`/ondemand/video/${idevento}/1`);
   if (!videos || !Array.isArray(videos) || !videos.length) {
     console.log(`[stream] nessun video per evento ${idevento}`);
@@ -257,27 +302,20 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
   const streams = videos
     .filter((v) => v.VideoUrl)
-    .map((v) => {
-      const proxyM3u8 = videoUrlToProxy(v.VideoUrl);
-      return {
-        title: v.Nome
-          ? `▶ ${v.Nome}${v.Durata ? ` (${v.Durata} min)` : ""}`
-          : "▶ Guarda",
-        url: proxyM3u8,
-        behaviorHints: { notWebReady: false },
-      };
-    });
+    .map((v) => ({
+      title: v.Nome ? `▶ ${v.Nome}${v.Durata ? ` (${v.Durata} min)` : ""}` : "▶ Guarda",
+      url: videoUrlToProxy(v.VideoUrl),
+      behaviorHints: { notWebReady: false },
+    }));
 
   console.log(`[stream] evento ${idevento}: ${streams.length} stream trovati`);
-  return { streams };
+  return { streams, cacheMaxAge: 300 };
 });
 
 function videoUrlToProxy(videoUrl) {
   try {
     const parsed = new URL(videoUrl);
-    if (PROXY_URL) {
-      return `${PROXY_URL}/stream/${parsed.hostname}${parsed.pathname}`;
-    }
+    if (PROXY_URL) return `${PROXY_URL}/stream/${parsed.hostname}${parsed.pathname}`;
     return `${PUBLIC_HOST}/proxy/stream/${parsed.hostname}${parsed.pathname}`;
   } catch {
     return videoUrl;
