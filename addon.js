@@ -272,27 +272,45 @@ builder.defineStreamHandler(async ({ type, id }) => {
   if (!id.startsWith("al_")) return { streams: [] };
   const idevento = parseInt(id.replace("al_", ""));
 
-  if (type === "tv") {
-    const liveList = await apiGet("/live/list");
-    const liveEvent = liveList?.find
-      ? liveList.find((e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento)
-      : null;
+ // CON QUESTO
+if (type === "tv") {
+  const liveList = await apiGet("/live/list");
+  const liveEvent = liveList?.find
+    ? liveList.find((e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento)
+    : null;
 
-    const m3u8Url = await getLiveStreamUrl();
-    if (!m3u8Url) {
-      console.log(`[stream] nessun URL live disponibile`);
-      return { streams: [] };
-    }
-
-    const eventName = liveEvent
-      ? (liveEvent.liveinfo?.Nome || liveEvent.Nome || "Live")
-      : "AranciaLive — Canale Live";
-
-    return {
-      streams: [{ title: `🔴 ${eventName}`, url: m3u8Url, behaviorHints: { notWebReady: false } }],
-      cacheMaxAge: 0,
-    };
+  const m3u8Url = await getLiveStreamUrl();
+  if (!m3u8Url) {
+    console.log(`[stream] nessun URL live disponibile`);
+    return { streams: [] };
   }
+
+  const eventName = liveEvent
+    ? (liveEvent.liveinfo?.Nome || liveEvent.Nome || "Live")
+    : "AranciaLive — Canale Live";
+
+  // Stato 1 = in diretta, Stato 0 = non ancora iniziato
+  const stato = liveEvent?.Stato ?? liveEvent?.liveinfo?.Stato;
+  const timeToStart = liveEvent?.TimeToStart ?? liveEvent?.liveinfo?.TimeToStart;
+
+  let streamTitle;
+  if (stato === 1) {
+    streamTitle = `🔴 ${eventName}`;
+  } else if (typeof timeToStart === "number" && timeToStart > 0) {
+    const d = Math.floor(timeToStart / 86400);
+    const h = Math.floor((timeToStart % 86400) / 3600);
+    const m = Math.floor((timeToStart % 3600) / 60);
+    const countdown = d > 0 ? `${d}g ${h}h` : h > 0 ? `${h}h ${m}min` : `${m} min`;
+    streamTitle = `⏳ ${eventName} — inizia tra ${countdown}`;
+  } else {
+    streamTitle = `🔴 ${eventName}`;
+  }
+
+  return {
+    streams: [{ title: streamTitle, url: m3u8Url, behaviorHints: { notWebReady: false } }],
+    cacheMaxAge: 0,
+  };
+}
 
   const videos = await apiGet(`/ondemand/video/${idevento}/1`);
   if (!videos || !Array.isArray(videos) || !videos.length) {
