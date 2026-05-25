@@ -3,16 +3,15 @@ const fetch = require("node-fetch");
 const http = require("http");
 const https = require("https");
 
-const DEVICE_ID    = process.env.DEVICE_ID;
-const LIVE_PSW     = process.env.LIVE_PSW;
+const DEVICE_ID     = process.env.DEVICE_ID;
+const LIVE_PSW      = process.env.LIVE_PSW;
 const UPSTREAM_HOST = "www.arancialive.com";
-const BASE_API     = `https://${UPSTREAM_HOST}/api/app/1/${DEVICE_ID}`;
-const MEDIA_BASE   = `https://${UPSTREAM_HOST}`;
-const PORT         = Number(process.env.PORT) || 7000;
-const ADDON_ID     = "it.arancialive.stremio";
-const PUBLIC_HOST  = (process.env.ADDON_HOST || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
-// worker fa da cors + proxy
-const PROXY_URL    = (process.env.PROXY_URL || "").replace(/\/$/, "");
+const BASE_API      = `https://${UPSTREAM_HOST}/api/app/1/${DEVICE_ID}`;
+const MEDIA_BASE    = `https://${UPSTREAM_HOST}`;
+const PORT          = Number(process.env.PORT) || 7000;
+const ADDON_ID      = "it.arancialive.stremio";
+const PUBLIC_HOST   = (process.env.ADDON_HOST || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
+const PROXY_URL     = (process.env.PROXY_URL || "").replace(/\/$/, "");
 
 const ARANCIA_HEADERS = {
   "User-Agent": "AranciaLiveApp/19 CFNetwork/3826.600.41 Darwin/24.6.0",
@@ -54,9 +53,7 @@ async function apiGet(path) {
   }
 }
 
-// chiama worker o api diretta
 async function getVideos(idevento) {
-  // worker
   const url = PROXY_URL
     ? `${PROXY_URL}/${UPSTREAM_HOST}/api/app/1/${DEVICE_ID}/ondemand/video/${idevento}/1`
     : `${BASE_API}/ondemand/video/${idevento}/1`;
@@ -84,12 +81,21 @@ async function getLiveStreamUrl() {
   }
 }
 
-function buildMeta(item, type = "series") {
-  const info = item.liveinfo || item;
-  const id   = `al_${info.IDEVENTO}`;
+function isEventoInDiretta(info) {
+  return (
+    typeof info.TimeToStart === "number" &&
+    info.TimeToStart <= 0 &&
+    typeof info.TimeToEnd === "number" &&
+    info.TimeToEnd > 0
+  );
+}
+
+function buildMeta(item, type) {
+  const info   = item.liveinfo || item;
+  const id     = `al_${info.IDEVENTO}`;
   const isPaid = info.IDTARIFFA !== 0;
-  const isLive = info.Stato === 1;
-  const year = info.DataEvento ? new Date(info.DataEvento).getFullYear() : null;
+  const isLive = isEventoInDiretta(info);
+  const year   = info.DataEvento ? new Date(info.DataEvento).getFullYear() : null;
 
   return {
     id,
@@ -126,7 +132,7 @@ function videosToEpisodes(videos, idevento) {
 
 const manifest = {
   id: ADDON_ID,
-  version: "2.0.0",
+  version: "2.1.0",
   name: "AranciaLive",
   description: "Guarda gli eventi live e on demand di AranciaLive, direttamente in stremio",
   logo: `${MEDIA_BASE}/website/img/favicon196x196.png`,
@@ -146,9 +152,18 @@ const manifest = {
         { name: "skip", isRequired: false },
       ],
     },
+    {
+      id: "arancialive-ondemand",
+      type: "movie",
+      name: "📼 On Demand",
+      extra: [
+        { name: "search", isRequired: false },
+        { name: "skip", isRequired: false },
+      ],
+    },
   ],
   resources: ["catalog", "meta", "stream"],
-  types: ["series", "tv"],
+  types: ["series", "movie", "tv"],
   idPrefixes: ["al_"],
 };
 
@@ -168,24 +183,33 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
   if (id === "arancialive-ondemand") {
     const page = Math.floor(skip / 20) + 1;
+
+    let rawItems = [];
+
     if (page === 1 && !search) {
       const catalog = await apiGet("/ondemandSuddivisi");
       if (catalog && Array.isArray(catalog)) {
-        const all = catalog.flatMap((cat) =>
-          (cat.ListaEventiOndemand || []).map((i) => buildMeta(i, "series"))
-        );
-        const seen = new Set();
-        const metas = all.filter((m) => {
-          if (seen.has(m.id)) return false;
-          seen.add(m.id);
-          return true;
-        });
-        return { metas, cacheMaxAge: 300 };
+        rawItems = catalog.flatMap((cat) => cat.ListaEventiOndemand || []);
       }
     }
-    const data = await apiGet(`/ondemand/list/${page}`);
-    if (!data || !Array.isArray(data)) return { metas: [] };
-    let metas = data.map((i) => buildMeta(i, "series"));
+
+    if (!rawItems.length) {
+      const data = await apiGet(`/ondemand/list/${page}`);
+      if (!data || !Array.isArray(data)) return { metas: [] };
+      rawItems = data;
+    }
+
+    const seen = new Set();
+    rawItems = rawItems.filter((i) => {
+      const evId = i.liveinfo?.IDEVENTO ?? i.IDEVENTO;
+      if (seen.has(evId)) return false;
+      seen.add(evId);
+      return true;
+    });
+
+    if (type === "movie") return { metas: [], cacheMaxAge: 300 };
+
+    let metas = rawItems.map((i) => buildMeta(i, "series"));
     if (search) metas = metas.filter((m) => m.name.toLowerCase().includes(search));
     return { metas, cacheMaxAge: 300 };
   }
@@ -199,7 +223,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
   const idevento = parseInt(id.replace("al_", "").split(":")[0]);
 
   let found = null;
-  let metaType = type;
+  let isLiveEvent = false;
 
   const catalog = await apiGet("/ondemandSuddivisi");
   if (catalog && Array.isArray(catalog)) {
@@ -207,7 +231,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
       found = (cat.ListaEventiOndemand || []).find(
         (e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento
       );
-      if (found) { metaType = "series"; break; }
+      if (found) break;
     }
   }
 
@@ -215,20 +239,27 @@ builder.defineMetaHandler(async ({ type, id }) => {
     const live = await apiGet("/live/list");
     if (live && Array.isArray(live)) {
       found = live.find((e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento);
-      if (found) metaType = "tv";
+      if (found) isLiveEvent = true;
     }
   }
 
   if (!found) return { meta: null };
 
+  if (isLiveEvent) {
+    const meta = buildMeta(found, "tv");
+    meta.id = `al_${idevento}`;
+    return { meta };
+  }
+
+  const videos = await getVideos(idevento);
+  const playableVideos = (videos || []).filter((v) => v.VideoUrl);
+
+  const metaType = playableVideos.length <= 1 ? "movie" : "series";
   const meta = buildMeta(found, metaType);
   meta.id = `al_${idevento}`;
 
-  if (metaType === "series") {
-    const videos = await getVideos(idevento);
-    if (videos && Array.isArray(videos) && videos.length) {
-      meta.videos = videosToEpisodes(videos, idevento);
-    }
+  if (metaType === "series" && playableVideos.length > 0) {
+    meta.videos = videosToEpisodes(playableVideos, idevento);
   }
 
   return { meta };
@@ -238,41 +269,63 @@ builder.defineStreamHandler(async ({ type, id }) => {
   if (!id.startsWith("al_")) return { streams: [] };
 
   if (type === "tv") {
-    const idevento = parseInt(id.replace("al_", "").split(":")[0]);
-    const liveList = await apiGet("/live/list");
+    const idevento  = parseInt(id.replace("al_", "").split(":")[0]);
+    const liveList  = await apiGet("/live/list");
     const liveEvent = liveList?.find?.((e) => (e.liveinfo?.IDEVENTO ?? e.IDEVENTO) === idevento);
 
     const m3u8Url = await getLiveStreamUrl();
     if (!m3u8Url) return { streams: [] };
 
-    const eventName = liveEvent?.liveinfo?.Nome || liveEvent?.Nome || "AranciaLive";
-    const stato = liveEvent?.Stato ?? liveEvent?.liveinfo?.Stato;
-    const timeToStart = liveEvent?.TimeToStart ?? liveEvent?.liveinfo?.TimeToStart;
+    const info        = liveEvent?.liveinfo || liveEvent || {};
+    const eventName   = info.Nome || "AranciaLive";
+    const timeToStart = info.TimeToStart;
+    const inDiretta   = isEventoInDiretta(info);
 
     let title;
-    if (stato === 1) {
+    if (inDiretta) {
       title = `🔴 ${eventName}`;
     } else if (typeof timeToStart === "number" && timeToStart > 0) {
       const h = Math.floor(timeToStart / 3600);
       const m = Math.floor((timeToStart % 3600) / 60);
-      title = `⏳ ${eventName} — inizia tra ${h > 0 ? `${h}h ` : ""}${m}min`;
+      title = `⏳ ${eventName} - inizia tra ${h > 0 ? `${h}h ` : ""}${m}min`;
     } else {
       title = `🔴 ${eventName}`;
     }
 
-    return { streams: [{ title, url: m3u8Url, behaviorHints: { notWebReady: false } }], cacheMaxAge: 0 };
+    return {
+      streams: [{ title, url: m3u8Url, behaviorHints: { notWebReady: false } }],
+      cacheMaxAge: 0,
+    };
   }
 
-  // Series: id formato "al_153:1:2" → episodio 2 stagione 1
-  const parts = id.replace("al_", "").split(":");
+  if (type === "movie") {
+    const idevento = parseInt(id.replace("al_", "").split(":")[0]);
+    const videos   = await getVideos(idevento);
+    if (!videos || !Array.isArray(videos)) return { streams: [] };
+
+    const video = videos.find((v) => v.VideoUrl);
+    if (!video) return { streams: [] };
+
+    const durationStr = video.Durata ? ` (${video.Durata} min)` : "";
+    return {
+      streams: [{
+        title: `▶ ${video.Nome || "Guarda"}${durationStr}`,
+        url: videoUrlToProxy(video.VideoUrl),
+        behaviorHints: { notWebReady: false },
+      }],
+      cacheMaxAge: 300,
+    };
+  }
+
+  const parts    = id.replace("al_", "").split(":");
   const idevento = parseInt(parts[0]);
   const epIndex  = parts.length >= 3 ? parseInt(parts[2]) - 1 : 0;
 
   const videos = await getVideos(idevento);
-  if (!videos || !Array.isArray(videos) || !videos.length) return { streams: [] };
+  if (!videos || !Array.isArray(videos)) return { streams: [] };
 
   const filtered = videos.filter((v) => v.VideoUrl);
-  const video = filtered[epIndex];
+  const video    = filtered[epIndex];
   if (!video) return { streams: [] };
 
   const durationStr = video.Durata ? ` (${video.Durata} min)` : "";
@@ -300,6 +353,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`🍊 AranciaLive addon → ${PUBLIC_HOST}/manifest.json`);
-  console.log(`🔀 Proxy → ${PROXY_URL || "(nessuno, URL diretti)"}`);
+  console.log(`🍊 AranciaLive addon ${PUBLIC_HOST}/manifest.json`);
+  console.log(`🔀 Proxy ${PROXY_URL || "(nessuno, URL diretti)"}`);
 });
